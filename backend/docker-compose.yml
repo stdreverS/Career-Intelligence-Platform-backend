@@ -1,0 +1,45 @@
+# Docker Compose — запускает и бэкенд и базу данных одной командой
+# Команда для запуска: docker-compose up -d
+
+services:
+  # База данных PostgreSQL
+  db:
+    image: postgres:16-alpine  # лёгкая версия PostgreSQL
+    container_name: resume_ai_db
+    restart: always
+    environment:
+      POSTGRES_USER: resumeuser
+      POSTGRES_PASSWORD: resumepassword123
+      POSTGRES_DB: resumeai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data  # данные сохраняются между перезапусками
+    ports:
+      - "5432:5432"  # порт для подключения к БД
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U resumeuser -d resumeai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Наш бэкенд сервер
+  backend:
+    build: .  # строим из нашего Dockerfile
+    container_name: resume_ai_backend
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy  # ждём пока БД запустится
+    environment:
+      DATABASE_URL: postgresql://resumeuser:resumepassword123@db:5432/resumeai
+      JWT_SECRET: ${JWT_SECRET:-super_secret_key_change_in_production}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PORT: 3001
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+    ports:
+      - "3001:3001"
+    command: >
+      sh -c "npx prisma migrate deploy && node src/index.js"
+
+# Сохраняем данные БД
+volumes:
+  postgres_data:
