@@ -18,6 +18,7 @@ const PORT = process.env.PORT || 3001;
 // MIDDLEWARE (обработчики запросов)
 // ============================================
 
+app.set('trust proxy', 1);
 // Разрешаем запросы с фронтенда (React работает на другом порту)
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
