@@ -1,5 +1,15 @@
 $kind: http-request
 name: SendMessage
-url: ""
-method: GET
+url: "{{url}}/api/chat/session/{{sessionId}}/message"
+method: POST
+body:
+  type: json
+  content: |-
+    {
+      "content": "Привет! Хочу создать резюме"
+    }
+auth:
+  type: bearer
+  credentials:
+    token: "{{token}}"
 order: 4463973381449539
