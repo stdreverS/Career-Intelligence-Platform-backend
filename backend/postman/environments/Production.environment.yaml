@@ -3,3 +3,9 @@ values:
   - key: url
     value: ''
     enabled: true
+  - key: token
+    value: ''
+    enabled: true
+  - key: sessionId
+    value: ''
+    enabled: true

@@ -1,0 +1,5 @@
+$kind: http-request
+name: SendMessage
+url: ""
+method: GET
+order: 4463973381449539
