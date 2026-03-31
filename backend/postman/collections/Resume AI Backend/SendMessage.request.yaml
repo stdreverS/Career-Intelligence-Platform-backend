@@ -6,7 +6,7 @@ body:
   type: json
   content: |-
     {
-      "content": "Привет! Хочу создать резюме"
+      "content": "Жду от тебя готового резюме!"
     }
 auth:
   type: bearer
