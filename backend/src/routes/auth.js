@@ -70,9 +70,16 @@ router.post('/login', async (req, res) => {
     }
 
     // Ищем пользователя по email
-    const user = await prisma.user.findUnique({ where: { email } });
+    // Ищем пользователя по email ИЛИ по имени (name)
+    let user = await prisma.user.findUnique({ where: { email } });
+
+    // Если не нашли по email — ищем по имени пользователя
     if (!user) {
-      return res.status(401).json({ error: 'Неверный email или пароль' });
+      user = await prisma.user.findFirst({ where: { name: email } });
+    }
+
+    if (!user) {
+      return res.status(401).json({ error: 'Неверный логин или пароль' });
     }
 
     // Сравниваем введённый пароль с зашифрованным
