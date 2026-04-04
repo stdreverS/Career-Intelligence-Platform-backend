@@ -1,9 +1,5 @@
 $kind: http-request
 name: Create Session
-url: "{{url}}/api/chat/session"
-method: POST
-auth:
-  type: bearer
-  credentials:
-    token: "{{token}}"
+url: ""
+method: GET
 order: 4426344188750001
