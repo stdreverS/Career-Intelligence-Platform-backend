@@ -4,11 +4,10 @@
 // GET /api/resume/:id/pdf     — скачать PDF
 
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../prisma');
 const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 router.use(authMiddleware);
 

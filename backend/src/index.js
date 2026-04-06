@@ -28,13 +28,21 @@ app.use(cors({
 // Говорим серверу, что будем работать с JSON
 app.use(express.json());
 
-// Защита от спама — не более 100 запросов за 15 минут с одного IP
+// Общий лимит — 100 запросов за 15 минут
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
   message: { error: 'Слишком много запросов, подождите немного' }
 });
 app.use('/api/', limiter);
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Слишком много попыток входа. Подождите 15 минут.' }
+});
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
 
 // ============================================
 // МАРШРУТЫ (Routes)

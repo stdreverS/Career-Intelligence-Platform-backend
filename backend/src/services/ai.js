@@ -163,6 +163,9 @@ function validateMessage(content) {
 // + актуальное резюме если оно есть
 // ============================================
 async function compressContext(messages, existingResume) {
+  // Не сжимаем если сообщений меньше 4 — нечего сжимать
+  if (!messages || messages.length < 4) return null;
+
   try {
     const dialogText = messages
       .map(m => `${m.role === 'user' ? 'Пользователь' : 'Ассистент'}: ${m.content}`)
@@ -180,7 +183,6 @@ async function compressContext(messages, existingResume) {
 
     const summary = response.choices[0].message.content;
 
-    // Если резюме уже есть — добавляем его к контексту
     const resumeText = existingResume
       ? `\n\nАКТУАЛЬНОЕ РЕЗЮМЕ:\n${existingResume}`
       : '';

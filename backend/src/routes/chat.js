@@ -1,5 +1,5 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../prisma');
 const authMiddleware = require('../middleware/auth');
 const {
   sendMessage,
@@ -9,13 +9,11 @@ const {
 } = require('../services/ai');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 router.use(authMiddleware);
 
 // ============================================
 // ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ СЖАТИЯ
-// Вызывается при всех "безопасных" действиях
 // ============================================
 async function compressAndCleanSession(sessionId) {
   try {
@@ -29,7 +27,6 @@ async function compressAndCleanSession(sessionId) {
 
     if (!session || session.messages.length === 0) return;
 
-    // Получаем текстовое резюме если оно есть
     let resumeText = null;
     if (session.resume) {
       const content = JSON.parse(session.resume.content);
@@ -38,16 +35,11 @@ async function compressAndCleanSession(sessionId) {
         : null;
     }
 
-    // Сжимаем контекст
     const newSummary = await compressContext(session.messages, resumeText);
     if (!newSummary) return;
 
-    // Удаляем ВСЕ сообщения — контекст сохранён в summary
-    await prisma.chatMessage.deleteMany({
-      where: { sessionId }
-    });
+    await prisma.chatMessage.deleteMany({ where: { sessionId } });
 
-    // Сохраняем сжатый контекст
     await prisma.chatSession.update({
       where: { id: sessionId },
       data: { contextSummary: newSummary }
@@ -59,13 +51,11 @@ async function compressAndCleanSession(sessionId) {
 
 // ============================================
 // СОЗДАТЬ НОВУЮ СЕССИЮ
-// При создании нового чата — сжимаем предыдущий открытый
 // ============================================
 router.post('/session', async (req, res) => {
   try {
     const { previousSessionId } = req.body;
 
-    // Если передан ID предыдущей сессии — сжимаем её
     if (previousSessionId) {
       await compressAndCleanSession(previousSessionId);
     }
@@ -86,13 +76,11 @@ router.post('/session', async (req, res) => {
 
 // ============================================
 // ПОЛУЧИТЬ ВСЕ СЕССИИ
-// При открытии списка — сжимаем текущую открытую сессию
 // ============================================
 router.get('/sessions', async (req, res) => {
   try {
     const { currentSessionId } = req.query;
 
-    // Сжимаем текущую открытую сессию если передана
     if (currentSessionId) {
       await compressAndCleanSession(currentSessionId);
     }
@@ -146,18 +134,7 @@ router.post('/session/:id/message', async (req, res) => {
       return res.status(400).json({ error: 'Сообщение не может быть пустым' });
     }
 
-    // Уровень 1 — валидация на инъекции и офтопик
-    const validation = validateMessage(content.trim());
-    if (!validation.valid) {
-      await prisma.chatMessage.create({
-        data: { sessionId: req.params.id, role: 'user', content: content.trim() }
-      });
-      await prisma.chatMessage.create({
-        data: { sessionId: req.params.id, role: 'assistant', content: validation.response }
-      });
-      return res.json({ message: validation.response, resume: null });
-    }
-
+    // Сначала проверяем что сессия существует
     const session = await prisma.chatSession.findFirst({
       where: { id: req.params.id, userId: req.user.userId },
       include: {
@@ -168,6 +145,18 @@ router.post('/session/:id/message', async (req, res) => {
 
     if (!session) {
       return res.status(404).json({ error: 'Сессия не найдена' });
+    }
+
+    // Уровень 1 — валидация на инъекции и офтопик
+    const validation = validateMessage(content.trim());
+    if (!validation.valid) {
+      await prisma.chatMessage.create({
+        data: { sessionId: session.id, role: 'user', content: content.trim() }
+      });
+      await prisma.chatMessage.create({
+        data: { sessionId: session.id, role: 'assistant', content: validation.response }
+      });
+      return res.json({ message: validation.response, resume: null });
     }
 
     // Уровень 2 — если резюме готово, разрешаем только корректировку
@@ -188,10 +177,10 @@ router.post('/session/:id/message', async (req, res) => {
       if (!isAllowed) {
         const blockResponse = 'Резюме уже сформировано! Я могу скорректировать его стиль или тон. Например: "сделай более формальным" или "перепиши мягче". Также можете скачать резюме в PDF.';
         await prisma.chatMessage.create({
-          data: { sessionId: req.params.id, role: 'user', content: content.trim() }
+          data: { sessionId: session.id, role: 'user', content: content.trim() }
         });
         await prisma.chatMessage.create({
-          data: { sessionId: req.params.id, role: 'assistant', content: blockResponse }
+          data: { sessionId: session.id, role: 'assistant', content: blockResponse }
         });
         return res.json({ message: blockResponse, resume: null });
       }
@@ -252,13 +241,11 @@ router.post('/session/:id/message', async (req, res) => {
 
 // ============================================
 // УДАЛИТЬ СЕССИЮ
-// При удалении — сжимаем текущую открытую если она другая
 // ============================================
 router.delete('/session/:id', async (req, res) => {
   try {
     const { currentSessionId } = req.query;
 
-    // Если удаляем не текущую сессию — сжимаем текущую
     if (currentSessionId && currentSessionId !== req.params.id) {
       await compressAndCleanSession(currentSessionId);
     }
