@@ -7,6 +7,7 @@ const {
   compressContext,
   extractResumeFromResponse
 } = require('../services/ai');
+const { getSalaryStats } = require('../services/hhru');
 
 const router = express.Router();
 
@@ -197,8 +198,38 @@ router.post('/session/:id/message', async (req, res) => {
       { role: 'user', content: content.trim() }
     ];
 
+    // Если данных в диалоге накопилось достаточно — обогащаем контекст реальными
+    // зарплатами с hh.ru, чтобы ИИ оперировал рынком, а не оценками "на глаз"
+    const positionKeywords = [
+      'разработчик', 'менеджер', 'дизайнер', 'аналитик',
+      'инженер', 'developer', 'manager', 'designer'
+    ];
+    const recentText = messageHistory.slice(-6).map(m => m.content).join(' ').toLowerCase();
+    const hasPosition = positionKeywords.some(k => recentText.includes(k));
+
+    let salaryContext = '';
+    if (hasPosition && messageHistory.length >= 8) {
+      const lastMessages = messageHistory.slice(-6).map(m => m.content).join(' ');
+      try {
+        const stats = await getSalaryStats(lastMessages.slice(0, 100));
+        if (stats && stats.vacanciesCount > 0) {
+          salaryContext = `\n\n[РЕАЛЬНЫЕ ДАННЫЕ РЫНКА]: По данным hh.ru найдено ${stats.vacanciesCount} вакансий. Реальные зарплаты: от ${stats.salaryMin.toLocaleString()} до ${stats.salaryMax.toLocaleString()} руб. Используй эти цифры в анализе.`;
+        }
+      } catch {
+        // молча игнорируем — ИИ обойдётся своими оценками
+      }
+    }
+
+    const enrichedMessages = [...messageHistory];
+    if (salaryContext) {
+      enrichedMessages[enrichedMessages.length - 1] = {
+        ...enrichedMessages[enrichedMessages.length - 1],
+        content: enrichedMessages[enrichedMessages.length - 1].content + salaryContext
+      };
+    }
+
     // Отправляем в ИИ с контекстом
-    const aiResponse = await sendMessage(messageHistory, session.contextSummary);
+    const aiResponse = await sendMessage(enrichedMessages, session.contextSummary);
 
     // Сохраняем ответ ИИ
     await prisma.chatMessage.create({

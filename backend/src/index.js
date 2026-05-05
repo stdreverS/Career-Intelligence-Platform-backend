@@ -10,6 +10,8 @@ const rateLimit = require('express-rate-limit');
 const authRoutes = require('./routes/auth');
 const chatRoutes = require('./routes/chat');
 const resumeRoutes = require('./routes/resume');
+const jobsRoutes = require('./routes/jobs');
+const prisma = require('./prisma');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -50,13 +52,20 @@ app.use('/api/auth/register', authLimiter);
 app.use('/api/auth', authRoutes);     // /api/auth/register, /api/auth/login
 app.use('/api/chat', chatRoutes);     // /api/chat/session, /api/chat/message
 app.use('/api/resume', resumeRoutes); // /api/resume/:id, /api/resume/:id/pdf
+app.use('/api/jobs', jobsRoutes);     // /api/jobs/salary, /api/jobs/vacancies, /api/jobs/skills
 
 // Проверочный маршрут — можно открыть в браузере
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'Сервер Resume AI работает!',
-    timestamp: new Date().toISOString()
+app.get('/api/health', async (req, res) => {
+  const dbOk = await prisma.$queryRaw`SELECT 1`
+    .then(() => true)
+    .catch(() => false);
+
+  res.json({
+    status: dbOk ? 'OK' : 'DEGRADED',
+    message: 'CarIP Backend',
+    database: dbOk ? 'connected' : 'error',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0'
   });
 });
 

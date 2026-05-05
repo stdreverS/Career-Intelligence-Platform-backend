@@ -119,4 +119,17 @@ router.get('/me', authMiddleware, async (req, res) => {
   }
 });
 
+// ================================
+// УДАЛЕНИЕ АККАУНТА
+// ================================
+router.delete('/account', authMiddleware, async (req, res) => {
+  try {
+    await prisma.user.delete({ where: { id: req.user.userId } });
+    res.json({ message: 'Аккаунт удалён' });
+  } catch (error) {
+    console.error('Ошибка удаления аккаунта:', error);
+    res.status(500).json({ error: 'Ошибка удаления аккаунта' });
+  }
+});
+
 module.exports = router;
