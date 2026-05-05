@@ -7,7 +7,7 @@ const {
   compressContext,
   extractResumeFromResponse
 } = require('../services/ai');
-const { getSalaryStats } = require('../services/hhru');
+const { getSalaryStats } = require('../services/salaryService');
 
 const router = express.Router();
 
@@ -199,7 +199,7 @@ router.post('/session/:id/message', async (req, res) => {
     ];
 
     // Если данных в диалоге накопилось достаточно — обогащаем контекст реальными
-    // зарплатами с hh.ru, чтобы ИИ оперировал рынком, а не оценками "на глаз"
+    // зарплатами (JSearch API + статический fallback), чтобы ИИ оперировал рынком
     const positionKeywords = [
       'разработчик', 'менеджер', 'дизайнер', 'аналитик',
       'инженер', 'developer', 'manager', 'designer'
@@ -212,8 +212,9 @@ router.post('/session/:id/message', async (req, res) => {
       const lastMessages = messageHistory.slice(-6).map(m => m.content).join(' ');
       try {
         const stats = await getSalaryStats(lastMessages.slice(0, 100));
-        if (stats && stats.vacanciesCount > 0) {
-          salaryContext = `\n\n[РЕАЛЬНЫЕ ДАННЫЕ РЫНКА]: По данным hh.ru найдено ${stats.vacanciesCount} вакансий. Реальные зарплаты: от ${stats.salaryMin.toLocaleString()} до ${stats.salaryMax.toLocaleString()} руб. Используй эти цифры в анализе.`;
+        if (stats) {
+          const source = stats.source === 'jsearch' ? 'JSearch API' : 'данным рынка труда';
+          salaryContext = `\n\n[РЕАЛЬНЫЕ ДАННЫЕ]: По ${source} средние зарплаты для "${stats.query}": от ${stats.min.toLocaleString()} до ${stats.max.toLocaleString()} руб. Используй именно эти цифры в анализе.`;
         }
       } catch {
         // молча игнорируем — ИИ обойдётся своими оценками

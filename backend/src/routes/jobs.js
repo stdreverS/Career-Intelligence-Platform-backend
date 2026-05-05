@@ -1,14 +1,14 @@
-// Роуты вакансий — обёртка над hh.ru API
+// Роуты вакансий — обёртка над salaryService (JSearch API + статический fallback)
 const express = require('express');
 const authMiddleware = require('../middleware/auth');
-const { getSalaryStats, getVacancies, getTopSkills } = require('../services/hhru');
+const { getSalaryStats, getVacancies, getTopSkills } = require('../services/salaryService');
 
 const router = express.Router();
 
 router.use(authMiddleware);
 
 // ============================================
-// КЭШ — чтобы не долбить hh.ru на каждый запрос
+// КЭШ — экономим лимит RapidAPI (200 запросов/день)
 // ============================================
 const cache = new Map();
 const CACHE_TTL = 60 * 60 * 1000; // 1 час
@@ -31,66 +31,56 @@ function setCached(key, data) {
 // СРЕДНИЕ ЗАРПЛАТЫ
 // ============================================
 router.get('/salary', async (req, res) => {
-  const { query, area = '1' } = req.query;
+  const query = req.query.query;
   if (!query || !String(query).trim()) {
     return res.status(400).json({ error: 'Параметр query обязателен' });
   }
 
-  const cacheKey = `salary:${query}:${area}`;
+  const cacheKey = `salary:${query}`;
   const cached = getCached(cacheKey);
-  if (cached) return res.json(cached);
+  if (cached) return res.json({ ...cached, cached: true });
 
-  const stats = await getSalaryStats(String(query), Number(area));
-  if (!stats) {
-    return res.status(503).json({ error: 'hh.ru недоступен' });
-  }
-
-  setCached(cacheKey, stats);
-  res.json(stats);
+  const result = await getSalaryStats(String(query));
+  setCached(cacheKey, result);
+  res.json({ ...result, cached: false });
 });
 
 // ============================================
 // СПИСОК ВАКАНСИЙ
 // ============================================
 router.get('/vacancies', async (req, res) => {
-  const { query, area = '1', limit = '5' } = req.query;
+  const query = req.query.query;
+  const limit = parseInt(req.query.limit) || 5;
+
   if (!query || !String(query).trim()) {
     return res.status(400).json({ error: 'Параметр query обязателен' });
   }
 
-  const cacheKey = `vacancies:${query}:${area}:${limit}`;
+  const cacheKey = `vacancies:${query}:${limit}`;
   const cached = getCached(cacheKey);
-  if (cached) return res.json(cached);
+  if (cached) return res.json({ vacancies: cached, count: cached.length, cached: true });
 
-  const vacancies = await getVacancies(String(query), Number(area), Number(limit));
-  if (!vacancies) {
-    return res.status(503).json({ error: 'hh.ru недоступен' });
-  }
-
+  const vacancies = await getVacancies(String(query), limit);
   setCached(cacheKey, vacancies);
-  res.json(vacancies);
+  res.json({ vacancies, count: vacancies.length, cached: false });
 });
 
 // ============================================
 // ТОП НАВЫКОВ
 // ============================================
 router.get('/skills', async (req, res) => {
-  const { query } = req.query;
+  const query = req.query.query;
   if (!query || !String(query).trim()) {
     return res.status(400).json({ error: 'Параметр query обязателен' });
   }
 
   const cacheKey = `skills:${query}`;
   const cached = getCached(cacheKey);
-  if (cached) return res.json(cached);
+  if (cached) return res.json({ skills: cached, cached: true });
 
   const skills = await getTopSkills(String(query));
-  if (!skills) {
-    return res.status(503).json({ error: 'hh.ru недоступен' });
-  }
-
   setCached(cacheKey, skills);
-  res.json(skills);
+  res.json({ skills, cached: false });
 });
 
 module.exports = router;

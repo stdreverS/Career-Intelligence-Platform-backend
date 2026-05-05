@@ -30,6 +30,18 @@ app.use(cors({
 // Говорим серверу, что будем работать с JSON
 app.use(express.json());
 
+// Логгер медленных запросов — пишем в stdout всё, что > 1с
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    if (duration > 1000) {
+      console.log(`SLOW: ${req.method} ${req.path} - ${duration}ms`);
+    }
+  });
+  next();
+});
+
 // Общий лимит — 100 запросов за 15 минут
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
