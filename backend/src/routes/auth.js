@@ -1,10 +1,36 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const prisma = require('../prisma');
 const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
+
+const ACCESS_TOKEN_TTL = '15m';
+const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 дней
+
+// ================================
+// ХЕЛПЕРЫ ВЫДАЧИ ТОКЕНОВ
+// ================================
+function issueAccessToken(user) {
+  return jwt.sign(
+    { userId: user.id, email: user.email },
+    process.env.JWT_SECRET,
+    { expiresIn: ACCESS_TOKEN_TTL }
+  );
+}
+
+async function issueRefreshToken(userId) {
+  const raw = crypto.randomBytes(40).toString('hex');
+  const hash = await bcrypt.hash(raw, 10);
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
+  await prisma.user.update({
+    where: { id: userId },
+    data: { refreshToken: hash, refreshTokenExpiresAt: expiresAt }
+  });
+  return raw;
+}
 
 // ================================
 // РЕГИСТРАЦИЯ
@@ -37,15 +63,13 @@ router.post('/register', async (req, res) => {
       data: { name, email, password: hashedPassword }
     });
 
-    const token = jwt.sign(
-      { userId: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const accessToken = issueAccessToken(user);
+    const refreshToken = await issueRefreshToken(user.id);
 
     res.status(201).json({
       message: 'Регистрация успешна!',
-      token,
+      accessToken,
+      refreshToken,
       user: { id: user.id, name: user.name, email: user.email }
     });
 
@@ -81,21 +105,76 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Неверный логин или пароль' });
     }
 
-    const token = jwt.sign(
-      { userId: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const accessToken = issueAccessToken(user);
+    const refreshToken = await issueRefreshToken(user.id);
 
     res.json({
       message: 'Вход выполнен успешно!',
-      token,
+      accessToken,
+      refreshToken,
       user: { id: user.id, name: user.name, email: user.email }
     });
 
   } catch (error) {
     console.error('Ошибка входа:', error);
     res.status(500).json({ error: 'Ошибка сервера при входе' });
+  }
+});
+
+// ================================
+// ОБНОВЛЕНИЕ ТОКЕНА
+// bcrypt-хэш не позволяет искать по индексу — фильтруем по активным сессиям
+// и сравниваем по очереди. Линейно от числа залогиненных пользователей.
+// ================================
+router.post('/refresh', async (req, res) => {
+  try {
+    const { refreshToken } = req.body || {};
+    if (typeof refreshToken !== 'string' || refreshToken.length === 0) {
+      return res.status(401).json({ error: 'Invalid or expired refresh token' });
+    }
+
+    const candidates = await prisma.user.findMany({
+      where: {
+        refreshToken: { not: null },
+        refreshTokenExpiresAt: { gt: new Date() }
+      }
+    });
+
+    let matched = null;
+    for (const candidate of candidates) {
+      if (await bcrypt.compare(refreshToken, candidate.refreshToken)) {
+        matched = candidate;
+        break;
+      }
+    }
+
+    if (!matched) {
+      return res.status(401).json({ error: 'Invalid or expired refresh token' });
+    }
+
+    const newAccessToken = issueAccessToken(matched);
+    const newRefreshToken = await issueRefreshToken(matched.id);
+
+    res.json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
+  } catch (error) {
+    console.error('Ошибка refresh:', error);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// ================================
+// ВЫХОД — обнуляем refresh-токен в БД
+// ================================
+router.post('/logout', authMiddleware, async (req, res) => {
+  try {
+    await prisma.user.update({
+      where: { id: req.user.userId },
+      data: { refreshToken: null, refreshTokenExpiresAt: null }
+    });
+    res.json({ message: 'Logged out' });
+  } catch (error) {
+    console.error('Ошибка logout:', error);
+    res.status(500).json({ error: 'Ошибка сервера' });
   }
 });
 

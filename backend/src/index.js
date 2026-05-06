@@ -11,6 +11,8 @@ const authRoutes = require('./routes/auth');
 const chatRoutes = require('./routes/chat');
 const resumeRoutes = require('./routes/resume');
 const jobsRoutes = require('./routes/jobs');
+const analysisRoutes = require('./routes/analysis');
+const githubRoutes = require('./routes/github');
 const prisma = require('./prisma');
 
 const app = express();
@@ -65,6 +67,8 @@ app.use('/api/auth', authRoutes);     // /api/auth/register, /api/auth/login
 app.use('/api/chat', chatRoutes);     // /api/chat/session, /api/chat/message
 app.use('/api/resume', resumeRoutes); // /api/resume/:id, /api/resume/:id/pdf
 app.use('/api/jobs', jobsRoutes);     // /api/jobs/salary, /api/jobs/vacancies, /api/jobs/skills
+app.use('/api/analysis', analysisRoutes); // /api/analysis/:id/gap-report
+app.use('/api/github', githubRoutes);     // /api/github/analyze
 
 // Проверочный маршрут — можно открыть в браузере
 app.get('/api/health', async (req, res) => {
@@ -88,7 +92,7 @@ app.use((err, req, res, next) => {
 });
 
 // Запускаем сервер
-app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0',() => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
   console.log(`🌐 Проверь: http://localhost:${PORT}/api/health`);
 });

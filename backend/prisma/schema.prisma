@@ -13,12 +13,14 @@ datasource db {
 
 // Таблица пользователей
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String   // хранится в зашифрованном виде (bcrypt)
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                     String    @id @default(uuid())
+  email                  String    @unique
+  password               String    // хранится в зашифрованном виде (bcrypt)
+  name                   String
+  refreshToken           String?   // bcrypt-хэш активного refresh-токена
+  refreshTokenExpiresAt  DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   // У одного пользователя может быть много сессий с ИИ
   sessions  ChatSession[]

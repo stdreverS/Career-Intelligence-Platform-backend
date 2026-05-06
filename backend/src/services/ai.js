@@ -246,6 +246,7 @@ function extractResumeFromResponse(text) {
 }
 
 module.exports = {
+  groq,
   sendMessage,
   validateMessage,
   compressContext,
