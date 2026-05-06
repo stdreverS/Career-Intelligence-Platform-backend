@@ -4,6 +4,7 @@
 const express = require('express');
 const prisma = require('../prisma');
 const authMiddleware = require('../middleware/auth');
+const validateUUID = require('../middleware/validateUUID');
 const { groq } = require('../services/ai');
 
 const router = express.Router();
@@ -13,6 +14,10 @@ router.use(authMiddleware);
 // ============================================
 // КЭШ — экономим квоту Groq, 30 минут на резюме
 // ============================================
+// In-memory cache — resets on every server restart.
+// TTL: 30 minutes for analysis, 10 minutes for github.
+// This is acceptable for the current scale.
+// Future: replace with Redis if multi-instance deploy is needed.
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const cache = {};
 
@@ -68,7 +73,7 @@ const GAP_SYSTEM_PROMPT = `Ты — карьерный аналитик. Ана�
 // GET /api/analysis/:id/gap-report
 // (монтируется как /api/analysis в index.js)
 // ============================================
-router.get('/:id/gap-report', async (req, res) => {
+router.get('/:id/gap-report', validateUUID('id'), async (req, res) => {
   try {
     const resumeId = req.params.id;
     const refresh = req.query.refresh === 'true';

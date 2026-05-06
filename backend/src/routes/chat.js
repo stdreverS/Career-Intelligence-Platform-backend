@@ -1,6 +1,7 @@
 const express = require('express');
 const prisma = require('../prisma');
 const authMiddleware = require('../middleware/auth');
+const validateUUID = require('../middleware/validateUUID');
 const {
   sendMessage,
   validateMessage,
@@ -8,6 +9,24 @@ const {
   extractResumeFromResponse
 } = require('../services/ai');
 const { getSalaryStats } = require('../services/salaryService');
+
+function validateResumeContent(content) {
+  if (!content || typeof content !== 'object') return false;
+  if (!content.resume) return false;
+  if (!content.resume.name || typeof content.resume.name !== 'string') return false;
+  if (!content.resume.targetPosition || typeof content.resume.targetPosition !== 'string') return false;
+  if (!content.resume.skills) return false;
+  if (!Array.isArray(content.resume.skills.hard)) return false;
+  return true;
+}
+
+function sanitizeAIResponse(text) {
+  return text
+    .replace(/[■□▪▫▲△◆◇⬛⬜⭐★☆]/g, '')
+    .replace(/[^\x09\x0A\x0D\x20-\x7E -ɏЀ-ӿ‐-‧‰-⁞⁠-⿿　-퟿]/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 const router = express.Router();
 
@@ -86,16 +105,50 @@ router.get('/sessions', async (req, res) => {
       await compressAndCleanSession(currentSessionId);
     }
 
-    const sessions = await prisma.chatSession.findMany({
-      where: { userId: req.user.userId },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        _count: { select: { messages: true } },
-        resume: { select: { targetPosition: true } }
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    if (req.query.limit && parseInt(req.query.limit) > 50) {
+      return res.status(400).json({ error: 'limit must be <= 50' });
+    }
+    if (req.query.page && parseInt(req.query.page) < 1) {
+      return res.status(400).json({ error: 'page must be >= 1' });
+    }
+
+    const [sessions, total] = await Promise.all([
+      prisma.chatSession.findMany({
+        where: { userId: req.user.userId },
+        orderBy: { updatedAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          resume: {
+            select: {
+              id: true,
+              targetPosition: true,
+              currentSalary: true,
+              futureSalary: true
+            }
+          }
+        }
+      }),
+      prisma.chatSession.count({
+        where: { userId: req.user.userId }
+      })
+    ]);
+
+    return res.json({
+      data: sessions,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
       }
     });
-
-    res.json({ sessions });
   } catch (error) {
     res.status(500).json({ error: 'Ошибка получения сессий' });
   }
@@ -104,7 +157,7 @@ router.get('/sessions', async (req, res) => {
 // ============================================
 // ПОЛУЧИТЬ КОНКРЕТНУЮ СЕССИЮ
 // ============================================
-router.get('/session/:id', async (req, res) => {
+router.get('/session/:id', validateUUID('id'), async (req, res) => {
   try {
     const session = await prisma.chatSession.findFirst({
       where: { id: req.params.id, userId: req.user.userId },
@@ -127,7 +180,7 @@ router.get('/session/:id', async (req, res) => {
 // ============================================
 // ОТПРАВИТЬ СООБЩЕНИЕ
 // ============================================
-router.post('/session/:id/message', async (req, res) => {
+router.post('/session/:id/message', validateUUID('id'), async (req, res) => {
   try {
     const { content } = req.body;
 
@@ -231,22 +284,28 @@ router.post('/session/:id/message', async (req, res) => {
 
     // Отправляем в ИИ с контекстом
     const aiResponse = await sendMessage(enrichedMessages, session.contextSummary);
+    const cleanAiResponse = sanitizeAIResponse(aiResponse);
 
     // Сохраняем ответ ИИ
     await prisma.chatMessage.create({
-      data: { sessionId: session.id, role: 'assistant', content: aiResponse }
+      data: { sessionId: session.id, role: 'assistant', content: cleanAiResponse }
     });
 
     // Проверяем — сгенерировало ли ИИ резюме
-    const resumeData = extractResumeFromResponse(aiResponse);
+    const resumeData = extractResumeFromResponse(cleanAiResponse);
     let savedResume = null;
 
     if (resumeData?.resume && resumeData?.analysis) {
+      if (!validateResumeContent(resumeData)) {
+        console.error('[RESUME] Invalid content structure:', JSON.stringify(resumeData).slice(0, 200));
+        return res.status(500).json({ error: 'Resume generation failed, please try again' });
+      }
+
       const resumePayload = {
         targetPosition: resumeData.resume.targetPosition,
         currentSalary: `${resumeData.analysis.currentSalaryMin}–${resumeData.analysis.currentSalaryMax} ₽`,
         futureSalary: `${resumeData.analysis.futureSalaryMin}–${resumeData.analysis.futureSalaryMax} ₽`,
-        content: JSON.stringify(resumeData)
+        content: sanitizeAIResponse(JSON.stringify(resumeData))
       };
 
       const existing = await prisma.resume.findUnique({
@@ -263,7 +322,7 @@ router.post('/session/:id/message', async (req, res) => {
           });
     }
 
-    res.json({ message: aiResponse, resume: savedResume });
+    res.json({ message: cleanAiResponse, resume: savedResume });
 
   } catch (error) {
     console.error('Ошибка отправки сообщения:', error);
@@ -274,7 +333,7 @@ router.post('/session/:id/message', async (req, res) => {
 // ============================================
 // УДАЛИТЬ СЕССИЮ
 // ============================================
-router.delete('/session/:id', async (req, res) => {
+router.delete('/session/:id', validateUUID('id'), async (req, res) => {
   try {
     const { currentSessionId } = req.query;
 

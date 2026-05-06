@@ -6,6 +6,7 @@
 const express = require('express');
 const prisma = require('../prisma');
 const authMiddleware = require('../middleware/auth');
+const validateUUID = require('../middleware/validateUUID');
 
 const router = express.Router();
 
@@ -16,19 +17,33 @@ router.use(authMiddleware);
 // ================================
 router.get('/my', async (req, res) => {
   try {
-    const resumes = await prisma.resume.findMany({
-      where: { userId: req.user.userId },
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        targetPosition: true,
-        currentSalary: true,
-        futureSalary: true,
-        createdAt: true
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 10));
+    const skip = (page - 1) * limit;
+
+    const [resumes, total] = await Promise.all([
+      prisma.resume.findMany({
+        where: { userId: req.user.userId },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit
+      }),
+      prisma.resume.count({
+        where: { userId: req.user.userId }
+      })
+    ]);
+
+    return res.json({
+      data: resumes,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
       }
     });
-
-    res.json({ resumes });
   } catch (error) {
     res.status(500).json({ error: 'Ошибка получения резюме' });
   }
@@ -37,7 +52,7 @@ router.get('/my', async (req, res) => {
 // ================================
 // ПОЛУЧИТЬ КОНКРЕТНОЕ РЕЗЮМЕ
 // ================================
-router.get('/:id', async (req, res) => {
+router.get('/:id', validateUUID('id'), async (req, res) => {
   try {
     const resume = await prisma.resume.findFirst({
       where: { id: req.params.id, userId: req.user.userId }
@@ -63,7 +78,7 @@ router.get('/:id', async (req, res) => {
 // Генерацию PDF делает фронтенд React (библиотека jsPDF или html2pdf)
 // Бэкенд возвращает данные, фронтенд строит PDF
 // ================================
-router.get('/:id/data-for-pdf', async (req, res) => {
+router.get('/:id/data-for-pdf', validateUUID('id'), async (req, res) => {
   try {
     const resume = await prisma.resume.findFirst({
       where: { id: req.params.id, userId: req.user.userId },

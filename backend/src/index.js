@@ -4,7 +4,18 @@
 require('dotenv').config(); // загружаем переменные из .env файла
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const sanitize = require('./middleware/sanitize');
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[UNHANDLED REJECTION]', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION]', err);
+  process.exit(1);
+});
 
 // Подключаем наши роуты (маршруты)
 const authRoutes = require('./routes/auth');
@@ -22,6 +33,11 @@ const PORT = process.env.PORT || 3001;
 // MIDDLEWARE (обработчики запросов)
 // ============================================
 
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: false
+}));
+
 app.set('trust proxy', 1);
 // Разрешаем запросы с фронтенда (React работает на другом порту)
 app.use(cors({
@@ -31,16 +47,31 @@ app.use(cors({
 
 // Говорим серверу, что будем работать с JSON
 app.use(express.json());
+app.use(sanitize);
 
-// Логгер медленных запросов — пишем в stdout всё, что > 1с
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
     const duration = Date.now() - start;
-    if (duration > 1000) {
-      console.log(`SLOW: ${req.method} ${req.path} - ${duration}ms`);
-    }
+    const level = res.statusCode >= 500 ? 'ERROR' :
+                  res.statusCode >= 400 ? 'WARN' : 'INFO';
+    console.log(`[${new Date().toISOString()}] ${level} ${req.method} ${req.path} ${res.statusCode} ${duration}ms`);
   });
+  next();
+});
+
+app.use((req, res, next) => {
+  const timeout = 30000;
+  const timer = setTimeout(() => {
+    if (!res.headersSent) {
+      console.error(`[TIMEOUT] ${req.method} ${req.originalUrl} exceeded ${timeout}ms`);
+      res.status(503).json({ error: 'Request timeout, please try again' });
+    }
+  }, timeout);
+
+  res.on('finish', () => clearTimeout(timer));
+  res.on('close', () => clearTimeout(timer));
+
   next();
 });
 
@@ -60,6 +91,21 @@ const authLimiter = rateLimit({
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
 
+const analysisLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many analysis requests, please wait 15 minutes' }
+});
+
+const githubLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  message: { error: 'Too many GitHub requests, please wait 15 minutes' }
+});
+
+app.use('/api/analysis', analysisLimiter);
+app.use('/api/github', githubLimiter);
+
 // ============================================
 // МАРШРУТЫ (Routes)
 // ============================================
@@ -76,23 +122,50 @@ app.get('/api/health', async (req, res) => {
     .then(() => true)
     .catch(() => false);
 
+  let groqOk = false;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+        signal: controller.signal
+      });
+      groqOk = response.ok;
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch {
+    groqOk = false;
+  }
+
   res.json({
-    status: dbOk ? 'OK' : 'DEGRADED',
-    message: 'CarIP Backend',
+    status: dbOk && groqOk ? 'OK' : 'DEGRADED',
     database: dbOk ? 'connected' : 'error',
+    groq: groqOk ? 'connected' : 'error',
+    uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     version: '1.0.0'
   });
 });
 
-// Обработка ошибок
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    return res.status(404).json({ error: `Route ${req.method} ${req.originalUrl} not found` });
+  }
+  next();
+});
+
 app.use((err, req, res, next) => {
-  console.error('Ошибка сервера:', err);
-  res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  const status = err.status || err.statusCode || 500;
+  const message = err.message || 'Internal server error';
+  console.error(`[ERROR] ${req.method} ${req.path} ${status}: ${message}`);
+  res.status(status).json({ error: message });
 });
 
 // Запускаем сервер
   app.listen(PORT, '0.0.0.0',() => {
   console.log(`✅ Сервер запущен на порту ${PORT}`);
   console.log(`🌐 Проверь: http://localhost:${PORT}/api/health`);
+  console.log('Cache: in-memory (resets on restart)');
 });

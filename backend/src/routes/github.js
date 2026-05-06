@@ -4,6 +4,7 @@
 const express = require('express');
 const prisma = require('../prisma');
 const authMiddleware = require('../middleware/auth');
+const validateUUID = require('../middleware/validateUUID');
 
 const router = express.Router();
 
@@ -16,6 +17,10 @@ const USER_AGENT = 'CarIP-Backend/1.0';
 // КЭШ — 10 минут на пользователя GitHub.
 // Храним сырые ответы API, чтобы апдейт резюме всегда выполнялся.
 // ============================================
+// In-memory cache — resets on every server restart.
+// TTL: 30 minutes for analysis, 10 minutes for github.
+// This is acceptable for the current scale.
+// Future: replace with Redis if multi-instance deploy is needed.
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const cache = new Map();
 
@@ -56,7 +61,7 @@ async function ghFetch(path) {
 // ============================================
 // POST /api/github/analyze
 // ============================================
-router.post('/analyze', async (req, res) => {
+router.post('/analyze', validateUUID('resumeId'), async (req, res) => {
   const { username, resumeId } = req.body || {};
 
   if (!username || !resumeId) {
