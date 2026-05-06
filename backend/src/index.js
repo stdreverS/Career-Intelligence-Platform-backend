@@ -7,6 +7,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const sanitize = require('./middleware/sanitize');
+const { version } = require('../package.json');
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[UNHANDLED REJECTION]', reason);
@@ -28,6 +29,7 @@ const prisma = require('./prisma');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+let isShuttingDown = false;
 
 // ============================================
 // MIDDLEWARE (обработчики запросов)
@@ -38,6 +40,13 @@ app.use(helmet({
   contentSecurityPolicy: false
 }));
 
+app.use((req, res, next) => {
+  if (isShuttingDown) {
+    return res.status(503).json({ error: 'Server is shutting down, please retry' });
+  }
+  next();
+});
+
 app.set('trust proxy', 1);
 // Разрешаем запросы с фронтенда (React работает на другом порту)
 app.use(cors({
@@ -46,8 +55,22 @@ app.use(cors({
 }));
 
 // Говорим серверу, что будем работать с JSON
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 app.use(sanitize);
+
+app.use((req, res, next) => {
+  const start = Date.now();
+  const originalEnd = res.end.bind(res);
+  res.end = function (...args) {
+    const duration = Date.now() - start;
+    if (!res.headersSent) {
+      res.setHeader('X-Response-Time', `${duration}ms`);
+    }
+    return originalEnd(...args);
+  };
+  next();
+});
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -88,8 +111,8 @@ const authLimiter = rateLimit({
   max: 10,
   message: { error: 'Слишком много попыток входа. Подождите 15 минут.' }
 });
-app.use('/api/auth/login', authLimiter);
-app.use('/api/auth/register', authLimiter);
+app.use('/api/v1/auth/login', authLimiter);
+app.use('/api/v1/auth/register', authLimiter);
 
 const analysisLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -103,21 +126,39 @@ const githubLimiter = rateLimit({
   message: { error: 'Too many GitHub requests, please wait 15 minutes' }
 });
 
-app.use('/api/analysis', analysisLimiter);
-app.use('/api/github', githubLimiter);
+app.use('/api/v1/analysis', analysisLimiter);
+app.use('/api/v1/github', githubLimiter);
+
+// ============================================
+// BACKWARD-COMPAT REDIRECTS (/api/* → /api/v1/*)
+// ============================================
+app.use('/api/auth', (req, res) =>
+  res.redirect(307, req.originalUrl.replace('/api/', '/api/v1/')));
+app.use('/api/chat', (req, res) =>
+  res.redirect(307, req.originalUrl.replace('/api/', '/api/v1/')));
+app.use('/api/resume', (req, res) =>
+  res.redirect(307, req.originalUrl.replace('/api/', '/api/v1/')));
+app.use('/api/jobs', (req, res) =>
+  res.redirect(307, req.originalUrl.replace('/api/', '/api/v1/')));
+app.use('/api/analysis', (req, res) =>
+  res.redirect(307, req.originalUrl.replace('/api/', '/api/v1/')));
+app.use('/api/github', (req, res) =>
+  res.redirect(307, req.originalUrl.replace('/api/', '/api/v1/')));
+app.use('/api/health', (req, res) =>
+  res.redirect(307, '/api/v1/health'));
 
 // ============================================
 // МАРШРУТЫ (Routes)
 // ============================================
-app.use('/api/auth', authRoutes);     // /api/auth/register, /api/auth/login
-app.use('/api/chat', chatRoutes);     // /api/chat/session, /api/chat/message
-app.use('/api/resume', resumeRoutes); // /api/resume/:id, /api/resume/:id/pdf
-app.use('/api/jobs', jobsRoutes);     // /api/jobs/salary, /api/jobs/vacancies, /api/jobs/skills
-app.use('/api/analysis', analysisRoutes); // /api/analysis/:id/gap-report
-app.use('/api/github', githubRoutes);     // /api/github/analyze
+app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/chat', chatRoutes);
+app.use('/api/v1/resume', resumeRoutes);
+app.use('/api/v1/jobs', jobsRoutes);
+app.use('/api/v1/analysis', analysisRoutes);
+app.use('/api/v1/github', githubRoutes);
 
 // Проверочный маршрут — можно открыть в браузере
-app.get('/api/health', async (req, res) => {
+app.get('/api/v1/health', async (req, res) => {
   const dbOk = await prisma.$queryRaw`SELECT 1`
     .then(() => true)
     .catch(() => false);
@@ -143,14 +184,14 @@ app.get('/api/health', async (req, res) => {
     status: dbOk && groqOk ? 'OK' : 'DEGRADED',
     database: dbOk ? 'connected' : 'error',
     groq: groqOk ? 'connected' : 'error',
-    uptime: process.uptime(),
+    uptime: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
-    version: '1.0.0'
+    version
   });
 });
 
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api')) {
+  if (req.originalUrl.startsWith('/api')) {
     return res.status(404).json({ error: `Route ${req.method} ${req.originalUrl} not found` });
   }
   next();
@@ -164,8 +205,35 @@ app.use((err, req, res, next) => {
 });
 
 // Запускаем сервер
-  app.listen(PORT, '0.0.0.0',() => {
-  console.log(`✅ Сервер запущен на порту ${PORT}`);
-  console.log(`🌐 Проверь: http://localhost:${PORT}/api/health`);
-  console.log('Cache: in-memory (resets on restart)');
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[SERVER] Started on port ${PORT}`);
+  console.log(`[SERVER] Health: http://localhost:${PORT}/api/v1/health`);
+  console.log('[CACHE] In-memory mode (resets on restart)');
 });
+
+async function shutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.log(`[SHUTDOWN] Received ${signal}, shutting down gracefully...`);
+
+  server.close(async () => {
+    console.log('[SHUTDOWN] HTTP server closed');
+    try {
+      await prisma.$disconnect();
+      console.log('[SHUTDOWN] Database disconnected');
+    } catch (err) {
+      console.error('[SHUTDOWN] Error disconnecting DB:', err);
+    }
+    console.log('[SHUTDOWN] Done');
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error('[SHUTDOWN] Forced exit after timeout');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

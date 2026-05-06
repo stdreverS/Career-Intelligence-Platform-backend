@@ -9,6 +9,7 @@ const {
   extractResumeFromResponse
 } = require('../services/ai');
 const { getSalaryStats } = require('../services/salaryService');
+const { parsePagination, validatePagination, paginationMeta } = require('../utils/pagination');
 
 function validateResumeContent(content) {
   if (!content || typeof content !== 'object') return false;
@@ -105,16 +106,8 @@ router.get('/sessions', async (req, res) => {
       await compressAndCleanSession(currentSessionId);
     }
 
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
-    const skip = (page - 1) * limit;
-
-    if (req.query.limit && parseInt(req.query.limit) > 50) {
-      return res.status(400).json({ error: 'limit must be <= 50' });
-    }
-    if (req.query.page && parseInt(req.query.page) < 1) {
-      return res.status(400).json({ error: 'page must be >= 1' });
-    }
+    if (!validatePagination(req.query, res)) return;
+    const { page, limit, skip } = parsePagination(req.query, { limit: 20 });
 
     const [sessions, total] = await Promise.all([
       prisma.chatSession.findMany({
@@ -133,21 +126,12 @@ router.get('/sessions', async (req, res) => {
           }
         }
       }),
-      prisma.chatSession.count({
-        where: { userId: req.user.userId }
-      })
+      prisma.chatSession.count({ where: { userId: req.user.userId } })
     ]);
 
     return res.json({
       data: sessions,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-        hasNext: page < Math.ceil(total / limit),
-        hasPrev: page > 1
-      }
+      pagination: paginationMeta(page, limit, total)
     });
   } catch (error) {
     res.status(500).json({ error: 'Ошибка получения сессий' });

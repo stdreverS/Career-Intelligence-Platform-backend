@@ -7,6 +7,7 @@ const express = require('express');
 const prisma = require('../prisma');
 const authMiddleware = require('../middleware/auth');
 const validateUUID = require('../middleware/validateUUID');
+const { parsePagination, validatePagination, paginationMeta } = require('../utils/pagination');
 
 const router = express.Router();
 
@@ -17,9 +18,8 @@ router.use(authMiddleware);
 // ================================
 router.get('/my', async (req, res) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 10));
-    const skip = (page - 1) * limit;
+    if (!validatePagination(req.query, res)) return;
+    const { page, limit, skip } = parsePagination(req.query, { limit: 10 });
 
     const [resumes, total] = await Promise.all([
       prisma.resume.findMany({
@@ -28,21 +28,12 @@ router.get('/my', async (req, res) => {
         skip,
         take: limit
       }),
-      prisma.resume.count({
-        where: { userId: req.user.userId }
-      })
+      prisma.resume.count({ where: { userId: req.user.userId } })
     ]);
 
     return res.json({
       data: resumes,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-        hasNext: page < Math.ceil(total / limit),
-        hasPrev: page > 1
-      }
+      pagination: paginationMeta(page, limit, total)
     });
   } catch (error) {
     res.status(500).json({ error: 'Ошибка получения резюме' });
